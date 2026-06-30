@@ -1,0 +1,480 @@
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
+import {
+  PrismaClient,
+  user_role as Prismauser_role,
+  user_passwordStatus,
+  user_status,
+} from '@prisma/client';
+import { PrismaClient, user_role as Prismauser_role } from '@prisma/client';import { JwtService } from '@nestjs/jwt';
+import * as bcrypt from 'bcrypt';
+import { LoginUserDto } from './dto/login-user.dto';
+import { AuthResponseDto } from './dto/auth-response.dto';
+import { SmsService } from './sms/sms.service';
+import { RegisterUserDto } from './dto/register-user.dto';
+interface AccountInfo {
+  id: string;
+  full_name: string;
+  account_number: string;
+  phone: string;
+  branch: string | null;
+  email: string | null;
+  status: string;
+  kyc_status: string;
+  balance: number;
+  currency: string;
+  address: string | null;
+  city: string | null;
+  country: string | null;
+  account_type: string;
+  account_tier: string;
+  opening_date: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const registerLocks: Map<string, boolean> = new Map();
+
+@Injectable()
+export class AuthServiceService {
+  private prisma = new PrismaClient();
+  private readonly SALT_ROUNDS = 10;
+  private loginLocks: Map<string, boolean> = new Map();
+  constructor(
+    private readonly jwtService: JwtService,
+    private readonly smsService: SmsService,
+  ) {}  private normalizePhone(phone: string): string {
+    return phone.replace(/[^0-9]/g, '');
+  }
+
+  async register(data: RegisterUserDto) {
+    const phone = this.normalizePhone(data.phone);
+    const key = `${data.account_number}-${phone}`;
+
+    if (registerLocks.get(key)) {
+      throw new BadRequestException('Requête déjà en cours...');
+    }
+
+    registerLocks.set(key, true);
+
+    try {
+      const account = await this.prisma.account.findUnique({
+        where: { account_number: data.account_number },
+      });
+
+      if (!account) throw new UnauthorizedException('Compte introuvable');
+
+      if (account.full_name !== data.full_name) {
+        throw new UnauthorizedException('Nom incorrect');
+      }
+
+      if (this.normalizePhone(account.phone) !== phone) {
+        throw new UnauthorizedException('Téléphone incorrect');
+      }
+      const existingUser = await this.prisma.user.findFirst({
+        where: {
+          OR: [{ account_number: data.account_number }, { phone: data.phone }],
+        },
+      });
+
+      if (existingUser)
+        throw new UnauthorizedException('Utilisateur déjà existant');
+
+      // OTP
+      if (!data.otpCode) {
+        const existingOtp = await this.prisma.otp.findFirst({
+          where: { email: phone, isUsed: false, expiresAt: { gt: new Date() } },
+        });
+
+        if (existingOtp)
+          throw new BadRequestException('Un OTP est déjà envoyé');
+
+        const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+        await this.prisma.otp.create({
+          data: {
+            email: phone,
+            otpCode,            expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+            isUsed: false,
+          },
+        });
+
+        await this.smsService.sendSms(
+          phone,
+          `Votre code de verification AccesPay est : ${otpCode}`,
+        );
+
+        return {
+          requiresOtp: true,
+          message: 'OTP envoyé avec succès',
+        };
+      }
+
+      // Vérifier OTP
+      const otp = await this.prisma.otp.findFirst({
+        where: { email: phone, otpCode: data.otpCode, isUsed: false },
+      });
+
+      if (!otp) throw new BadRequestException('OTP invalide');
+      if (!otp.expiresAt || new Date() > otp.expiresAt)
+        throw new BadRequestException('OTP expiré');
+
+      // Créer user      const user = await this.prisma.user.create({
+        data: {
+          id: crypto.randomUUID(),
+          account_number: data.account_number,
+          full_name: data.full_name,
+          phone: data.phone,
+          password: data.password ? await bcrypt.hash(data.password, 10) : null,
+          role: 'USER',
+          status: 'ACTIVE',
+        },
+      });
+
+      await this.prisma.otp.update({
+        where: { id: otp.id },
+        data: { isUsed: true },
+      });
+      await this.smsService.sendSms(phone, `Bienvenue ${user.full_name}`);
+
+      return { message: 'Inscription réussie', data: user };    } finally {
+      registerLocks.delete(key);
+    }
+  }
+
+  // Dans auth-service.service.ts
+  async login(dto: LoginUserDto): Promise<AuthResponseDto> {
+    console.log(
+      '[AuthService.login] Looking for user with identifier:',
+      dto.identifier,
+    );
+
+    const user = await this.prisma.user.findFirst({
+      where: {
+        phone: dto.identifier, // Connexion uniquement par téléphone
+      },
+    });
+
+    if (!user) {
+      console.log(
+        '[AuthService.login] User not found with phone:',
+        dto.identifier,
+      );
+      throw new UnauthorizedException('Utilisateur non trouvé');
+    }
+
+    console.log('[AuthService.login] User found:', {
+      id: user.id,
+      phone: user.phone,
+      role: user.role,
+      status: user.status,
+      hasPassword: !!user.password,
+    });
+
+    if (!user.password) {
+      console.log('[AuthService.login] User has no password set');
+      throw new UnauthorizedException(
+        "Ce compte n'a pas de mot de passe. Veuillez définir un mot de passe d'abord.",
+      );
+    }
+
+    const isValidPassword: boolean = await bcrypt.compare(
+      dto.password,
+      user.password,
+    );
+
+    if (!isValidPassword) {
+      console.log('[AuthService.login] Invalid password for user:', user.phone);
+      throw new UnauthorizedException('Mot de passe incorrect');
+    }
+
+    console.log('[AuthService.login] Password valid, generating JWT');
+    const result = this.generateJwt(user, 'Connexion réussie');
+
+    console.log('[AuthService.login] JWT generated successfully');
+    return result;
+  }
+
+  async verifyOtp(email: string, code: string): Promise<{ message: string }> {
+    // 1️⃣ Chercher l'entrée OTP valide
+    const otpEntry = await this.prisma.otp.findFirst({
+      where: {
+        email: email.toLowerCase(), // convertir l'email en minuscule        otpCode: code,
+        isUsed: false,
+        expiresAt: { gt: new Date() },
+      },
+    });
+
+    if (!otpEntry) {
+      throw new BadRequestException('Code OTP invalide ou expiré.');
+    }
+
+    // 2️⃣ Marquer le code OTP comme utilisé
+    await this.prisma.otp.update({
+      where: { id: otpEntry.id },
+      data: { isUsed: true },
+    });
+
+    // 3️⃣ Retourner un message structuré
+    return {
+      message: 'OTP validé avec succès. Vous pouvez maintenant continuer.',
+    };
+  }
+
+  // -------------------
+  // Envoi OTP via SMS
+  // -------------------
+  async sendResetPasswordOtp(email: string): Promise<{ message: string }> {
+    // Cherche l'utilisateur par numéro de téléphone ou email
+    const user = await this.prisma.user.findFirst({
+      where: {
+        OR: [
+          { phone: email }, // juste la valeur, pas { email: ... }
+          { email: email }, // pareil ici
+        ],
+      },
+    });
+
+    if (!user) {
+      throw new BadRequestException(
+        'Aucun utilisateur trouvé avec ce numéro ou email.',
+      );
+    }
+
+    // Génération du code OTP
+    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+
+    // Sauvegarde OTP dans la base
+    await this.prisma.otp.create({
+      data: {
+        userId: user.id,
+        email: user.phone || user.email!,
+        otpCode,
+        expiresAt: new Date(Date.now() + 10 * 60 * 1000),        isUsed: false,
+      },
+    });
+
+    // Envoi SMS si téléphone présent
+    if (user.phone) {
+      await this.smsService.sendSms(
+        user.phone,
+        `Votre code OTP est : ${otpCode}`,
+      );
+    }
+
+    return { message: 'OTP envoyé avec succès.' };
+  }
+  // -------------------
+  // Réinitialisation mot de passe avec OTP via SMS/email
+  // -------------------
+  async resetPassword(resetPasswordDto: {
+    email: string;
+    code: string;
+    password: string;
+  }): Promise<{ message: string }> {
+    const { email, code, password } = resetPasswordDto;
+
+    // Cherche l'utilisateur
+    const user = await this.prisma.user.findFirst({
+      where: {
+        OR: [{ phone: email }, { email: email }],
+      },
+    });
+
+    if (!user) {
+      throw new BadRequestException(
+        'Aucun utilisateur trouvé avec ce numéro ou email.',
+      );
+    }
+
+    // Cherche l'OTP valide
+    const otpEntry = await this.prisma.otp.findFirst({
+      where: {
+        email: email, // correspond au champ email de OTP        otpCode: code.toString(),
+        isUsed: false,
+        expiresAt: { gt: new Date() },
+      },
+    });
+
+    if (!otpEntry) {
+      throw new BadRequestException('OTP invalide ou expiré.');
+    }
+
+    // Hash du nouveau mot de passe
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Mise à jour du mot de passe utilisateur    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { password: hashedPassword },
+    });
+
+    return { message: 'Mot de passe réinitialisé avec succès.' };
+  }
+
+  // Dans auth-service.service.ts
+  async changePassword(
+    userId: string,
+    changePasswordDto: { currentPassword: string; newPassword: string },
+  ): Promise<{ message: string }> {
+    console.log('=== CHANGE PASSWORD SERVICE ===');
+    console.log('Received userId:', userId);
+    console.log('Received DTO:', {
+      hasCurrentPassword: !!changePasswordDto?.currentPassword,
+      hasNewPassword: !!changePasswordDto?.newPassword,
+      currentPasswordLength: changePasswordDto?.currentPassword?.length,
+      newPasswordLength: changePasswordDto?.newPassword?.length,
+    });
+
+    const { currentPassword, newPassword } = changePasswordDto;
+
+    // ✅ Validation plus précise
+    if (!currentPassword || currentPassword.trim() === '') {
+      console.error('Current password is missing or empty');
+      throw new BadRequestException('Le mot de passe actuel est requis');
+    }
+
+    if (!newPassword || newPassword.trim() === '') {
+      console.error('New password is missing or empty');
+      throw new BadRequestException('Le nouveau mot de passe est requis');
+    }
+
+    // Cherche utilisateur
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, password: true },
+    });
+
+    if (!user) {
+      console.error('User not found:', userId);
+      throw new NotFoundException('Utilisateur non trouvé');
+    }
+
+    if (!user.password) {
+      console.error('User has no password set');
+      throw new BadRequestException("Ce compte n'a pas de mot de passe défini");
+    }
+
+    // Vérifier le mot de passe actuel
+    console.log('Comparing passwords...');
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+
+    if (!isMatch) {
+      console.error('Current password does not match');
+      throw new BadRequestException('Mot de passe actuel incorrect');
+    }
+
+    // Hasher le nouveau mot de passe
+    console.log('Hashing new password...');
+    const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+
+    // Mise à jour dans la base
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { password: hashedNewPassword },
+    });
+
+    console.log('Password changed successfully for user:', userId);
+    return { message: 'Mot de passe mis à jour avec succès' };
+  }
+
+  async setPassword(userId: string, newPassword: string): Promise<void> {
+    const hashedPassword: string = await bcrypt.hash(
+      newPassword,
+      this.SALT_ROUNDS,
+    );
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { password: hashedPassword },
+    });
+  }
+
+  async getAccountByNumber(accountNumber: string): Promise<AccountInfo> {
+    const account = await this.prisma.account.findUnique({
+      where: { account_number: accountNumber },
+    });
+
+    if (!account) {
+      throw new NotFoundException(
+        `Compte bancaire avec le numéro ${accountNumber} non trouvé`,
+      );
+    }
+
+    return account as AccountInfo;  }
+
+  private generateJwt(
+    user: {
+      id: string;
+      email: string | null;
+      role: Prismauser_role;
+      account_number?: string | null;
+      phone?: string | null;
+      full_name?: string | null;
+      branch?: string | null;
+      status?: string;
+      deleted?: boolean | null;
+      createdAt?: Date;
+      updatedAt?: Date;
+      password?: string | null;
+    },
+    message?: string,
+  ): AuthResponseDto {
+    // Log de débogage
+    console.log('Generating JWT for user:', {
+      id: user.id,
+      role: user.role,
+      status: user.status,
+      hasEmail: !!user.email,
+      hasPhone: !!user.phone,
+      account_number: !!user.account_number,
+    });
+    const payload = {
+      id: user.id,
+      email: user.email || null,
+      phone: user.phone || null,
+      full_name: user.full_name || null,
+      role: user.role,
+      status: user.status || 'ACTIVE',
+      account_number: user.account_number ?? null,
+    };
+
+    console.log('JWT Payload:', payload);
+    const accessToken = this.jwtService.sign(payload, {
+      secret: process.env.JWT_SECRET || 'secret',
+      expiresIn: '30d',
+    });
+
+    // Décoder le token pour vérifier (optionnel)
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+    const decoded = this.jwtService.decode(accessToken);
+    console.log('Decoded token:', decoded);
+
+    return {
+      accessToken,
+      refreshToken: this.jwtService.sign(payload, {
+        secret: process.env.JWT_SECRET || 'secret',
+        expiresIn: '30d',
+      }),      data: {
+        id: user.id,
+        email: user.email,
+        phone: user.phone || null,
+        password: user.password || null,        full_name: user.full_name || null,
+        account_number: user.account_number || null,
+        branch: user.branch || null,
+        role: user.role,
+        passwordStatus: user.passwordStatus || null,
+        pinstatus: user.pinstatus ?? null,
+        merchantCode: user.merchantCode || null,
+        businessName: user.businessName || null,
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+        status: (user.status as any) || 'ACTIVE',
+        deleted: user.deleted || false,
+        createdAt: user.createdAt || new Date(),
+        updatedAt: user.updatedAt || new Date(),
+      },
+      message,
+    };
+  }
+}
