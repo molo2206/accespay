@@ -2,6 +2,14 @@
 import { Injectable } from '@nestjs/common';
 import axios from 'axios';
 
+// Définir le type de réponse de l'API Dream Digital
+interface DreamDigitalSmsResponse {
+  status: string;        // 'S' pour succès, 'E' pour erreur
+  message_id?: string;   // ID du message (présent en cas de succès)
+  description?: string;  // Description de l'erreur (en cas d'échec)
+  // Ajoutez d'autres champs si nécessaire
+}
+
 @Injectable()
 export class SmsService {
   private readonly apiId = 'API23108080245';
@@ -39,7 +47,8 @@ export class SmsService {
         url.replace(this.apiPassword, '***'),
       );
 
-      const response = await axios.get(url, {
+      // 🔥 AJOUT : Typer la réponse avec l'interface
+      const response = await axios.get<DreamDigitalSmsResponse>(url, {
         timeout: 30000,
         headers: {
           Accept: 'application/json',
@@ -49,9 +58,10 @@ export class SmsService {
 
       console.log('📥 Réponse API:', response.data);
 
+      // Maintenant TypeScript connaît response.data.status et response.data.message_id
       if (response.data && response.data.status === 'S') {
         console.log(
-          `✅ SMS envoyé avec succès! ID: ${response.data.message_id}`,
+          `✅ SMS envoyé avec succès! ID: ${response.data.message_id || 'N/A'}`,
         );
         return true;
       } else {

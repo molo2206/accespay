@@ -16,7 +16,7 @@ export class BankService {
   constructor(encryptionService: EncryptionService) {
     this.baseUrl =
       process.env.BANK_BASE_URL ||
-      'http://10.10.97.165/AccessFinace_Wallet_UAT/Service1.asmx';
+      'https://www.bankapi.accesfinance.africa/service1.asmx';
     this.apiKey = process.env.BANK_API_KEY || '';
     this.authToken = process.env.BANK_AUTH_TOKEN || '';
     this.encryptionService = encryptionService;
