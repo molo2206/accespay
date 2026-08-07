@@ -1603,15 +1603,34 @@ export class UserServiceService {
   async getAppSettings() {
     const FIXED_ID = 'app_settings_unique';
 
-    const settings = await this.prisma.app_settings.findUnique({
+    // 1. Essayer de trouver avec l'ID fixe
+    let settings = await this.prisma.app_settings.findUnique({
       where: { id: FIXED_ID },
     });
 
+    // 2. Si pas trouvé, essayer de récupérer le premier
     if (!settings) {
-      return {
-        message: 'Application settings not found',
-        data: null,
-      };
+      const firstSettings = await this.prisma.app_settings.findFirst();
+
+      if (firstSettings) {
+        // Mettre à jour l'ID du premier enregistrement vers l'ID fixe
+        settings = await this.prisma.app_settings.update({
+          where: { id: firstSettings.id },
+          data: { id: FIXED_ID },
+        });
+      } else {
+        // 3. Si aucun enregistrement n'existe, en créer un vide
+        settings = await this.prisma.app_settings.create({
+          data: {
+            id: FIXED_ID,
+            app_name: 'AccesPay',
+            default_language: 'fr',
+            default_currency: 'CDF',
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+        });
+      }
     }
 
     return {
