@@ -20,8 +20,8 @@ export class BankService {
     this.apiKey = process.env.BANK_API_KEY || '';
     this.authToken = process.env.BANK_AUTH_TOKEN || '';
     this.encryptionService = encryptionService;
-    // ⏱️ Timeout par défaut : 120 secondes (modifiable via .env)
-    this.timeoutMs = parseInt(process.env.BANK_TIMEOUT_MS || '120000', 10);
+    // ⏱️ Timeout par défaut : 15 secondes (modifiable via .env)
+    this.timeoutMs = parseInt(process.env.BANK_TIMEOUT_MS || '15000', 10);
 
     this.logger.log(`BankService initialized, timeout: ${this.timeoutMs}ms`);
   }
@@ -85,10 +85,11 @@ export class BankService {
         : `Bearer ${this.authToken}`;
     }
 
-    const maxRetries = 3;
+    const maxRetries = 2; // ✅ réduit de 3 à 2
     let lastError: any = null;
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      const startTime = Date.now(); // ✅ mesure de durée
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -104,7 +105,9 @@ export class BankService {
 
         const rawResponse = await response.text();
 
-        this.logger.log(`Bank API status: ${response.status}`);
+        this.logger.log(
+          `Bank API status: ${response.status} (${Date.now() - startTime}ms)`,
+        );
         this.logger.log(
           `Bank API raw response: ${rawResponse.substring(0, 100)}...`,
         );
@@ -135,11 +138,22 @@ export class BankService {
       } catch (error) {
         lastError = error;
         this.logger.error(
-          `Bank API call failed (attempt ${attempt}/${maxRetries}):`,
+          `Bank API call failed (attempt ${attempt}/${maxRetries}, ${Date.now() - startTime}ms):`,
           error.message,
         );
+
+        // ✅ Stop immédiat sur timeout — pas de retry inutile
+        if (error?.name === 'AbortError' || error?.code === 'ETIMEDOUT') {
+          this.logger.error('Bank API TIMEOUT — aborting retries');
+          throw new RpcException({
+            status: 'error',
+            message: this.translate('bank_timeout', lang),
+            statusCode: 504,
+          });
+        }
+
         if (attempt < maxRetries) {
-          const delay = 1000 * attempt;
+          const delay = 500 * attempt; // ✅ réduit de 1000ms à 500ms
           this.logger.log(`Retrying in ${delay}ms...`);
           await new Promise((resolve) => setTimeout(resolve, delay));
         }

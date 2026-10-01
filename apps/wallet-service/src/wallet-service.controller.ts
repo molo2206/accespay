@@ -9,7 +9,7 @@ import { PayDto, SendDto } from './dto/wallet-operation.dto';
 
 @Controller()
 export class WalletServiceController {
-  constructor(private readonly walletService: WalletServiceService) {}
+  constructor(private readonly walletService: WalletServiceService) { }
 
   // ==================== MÉTHODES DE BASE ====================
 
@@ -360,10 +360,17 @@ export class WalletServiceController {
       );
     } catch (error) {
       console.error('[WalletService] cashout error:', error);
+
+      // ✅ Si c'est déjà une RpcException, la laisser passer telle quelle
+      if (error instanceof RpcException) {
+        throw error;
+      }
+
+      // ✅ Sinon, envelopper proprement
       throw new RpcException({
         status: 'error',
         message: error instanceof Error ? error.message : 'Unknown error',
-        statusCode: 400,
+        statusCode: 500,
       });
     }
   }

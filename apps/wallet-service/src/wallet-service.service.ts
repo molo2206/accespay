@@ -19,7 +19,7 @@ import {
 } from './dto/transaction.dto';
 import { SendDto, PayDto } from './dto/wallet-operation.dto';
 import { ApiResponse } from './interfaces/api-response.interface';
-import { user_status, wallet_currency } from '@prisma/client';
+import { Prisma, user_status, wallet_currency } from '@prisma/client';
 import { SmsService } from 'apps/auth-service/src/sms/sms.service';
 import { NotificationHelper } from 'apps/notification-service/src/helpers/NotificationHelper';
 import { NotificationType } from 'apps/notification-service/src/type/notification-type';
@@ -56,9 +56,10 @@ export class WalletServiceService {
     action: string,
     details: any,
     ipAddress: string | null,
+    tx: Prisma.TransactionClient = this.prisma,
   ) {
     try {
-      await this.prisma.audit_log.create({
+      await tx.audit_log.create({
         data: {
           userId,
           action,
@@ -1520,135 +1521,123 @@ export class WalletServiceService {
     ipAddress?: string,
   ): Promise<ApiResponse<{ wallet: WalletResponseDto; transaction: any }>> {
     console.log('[WalletService] Top-up request:', { userId, amount, lang });
+
+    // ---- 1) Validations rapides (hors transaction) ----
     if (amount <= 0)
       throw new RpcException({
         status: 'error',
         message: this.i18nService.translate('wallet.amount_positive', lang),
         statusCode: 400,
       });
-    if (!pin || pin.length < 4) {
+    if (!pin || pin.length < 4)
       throw new RpcException({
         status: 'error',
         message: this.i18nService.translate('wallet.pin_min_length', lang),
         statusCode: 400,
       });
-    }
-    if (!/^\d+$/.test(pin)) {
+    if (!/^\d+$/.test(pin))
       throw new RpcException({
         status: 'error',
         message: this.i18nService.translate('wallet.pin_digits_only', lang),
         statusCode: 400,
       });
-    }
 
-    try {
-      const result = await this.prisma.$transaction(
-        async (tx) => {
-          const user = await tx.user.findUnique({
-            where: { id: userId },
-            select: {
-              id: true,
-              full_name: true,
-              phone: true,
-              account_number: true,
-              pin: true,
-              status: true,
-              failed_pin_attempts: true,
-            },
+    // ---- 2) Vérification PIN + user (transaction COURTE) ----
+    const user = await this.prisma.$transaction(
+      async (tx) => {
+        const u = await tx.user.findUnique({
+          where: { id: userId },
+          select: {
+            id: true,
+            full_name: true,
+            phone: true,
+            account_number: true,
+            pin: true,
+            status: true,
+            failed_pin_attempts: true,
+          },
+        });
+        if (!u)
+          throw new RpcException({
+            status: 'error',
+            message: this.i18nService.translate('wallet.user_not_found', lang),
+            statusCode: 404,
           });
-          if (!user)
-            throw new RpcException({
-              status: 'error',
-              message: this.i18nService.translate('wallet.user_not_found', lang),
-              statusCode: 404,
-            });
+        if (u.status === user_status.BLOCKED)
+          throw new RpcException({
+            status: 'error',
+            message: this.i18nService.translate('account_blocked_admin', lang),
+            statusCode: 403,
+          });
 
-          if (user.status === user_status.BLOCKED) {
-            const message = this.i18nService.translate('account_blocked_admin', lang);
-            throw new RpcException({
-              status: 'error',
-              message,
-              statusCode: 403,
-            });
+        const hashedPin = crypto.createHash('sha256').update(pin).digest('hex');
+        if (u.pin !== hashedPin) {
+          const newAttempts = (u.failed_pin_attempts || 0) + 1;
+          let newStatus: user_status = u.status;
+          let lockedUntil: Date | null = null;
+          if (newAttempts >= 5) {
+            newStatus = user_status.BLOCKED;
+            lockedUntil = new Date(Date.now() + 30 * 60 * 1000);
           }
-
-          const hashedPin = crypto.createHash('sha256').update(pin).digest('hex');
-          if (user.pin !== hashedPin) {
-            const newAttempts = (user.failed_pin_attempts || 0) + 1;
-            let newStatus: user_status = user.status;
-            let lockedUntil: Date | null = null;
-            if (newAttempts >= 5) {
-              newStatus = user_status.BLOCKED;
-              lockedUntil = new Date(Date.now() + 30 * 60 * 1000);
-            }
-            await tx.user.update({
-              where: { id: userId },
-              data: {
-                failed_pin_attempts: newAttempts,
-                status: newStatus,
-              },
-            });
-            await logFailedLoginAttempt(
-              this.prisma,
-              user.id,
-              user.account_number ?? user.phone ?? user.id,
-              ipAddress,
-              undefined,
-              newAttempts,
-              lockedUntil,
-            );
-            throw new RpcException({
-              status: 'error',
-              message: this.i18nService.translate('wallet.pin_incorrect', lang),
-              statusCode: 401,
-            });
-          }
-
           await tx.user.update({
             where: { id: userId },
-            data: { failed_pin_attempts: 0 },
+            data: { failed_pin_attempts: newAttempts, status: newStatus },
           });
+          await logFailedLoginAttempt(
+            tx as any, // ✅ cast : tx est compatible à l'exécution
+            u.id,
+            u.account_number ?? u.phone ?? u.id,
+            ipAddress,
+            undefined,
+            newAttempts,
+            lockedUntil,
+          );
+          throw new RpcException({
+            status: 'error',
+            message: this.i18nService.translate('wallet.pin_incorrect', lang),
+            statusCode: 401,
+          });
+        }
 
-          if (!user.account_number)
-            throw new RpcException({
-              status: 'error',
-              message: this.i18nService.translate('wallet.no_bank_account', lang),
-              statusCode: 400,
-            });
+        await tx.user.update({
+          where: { id: userId },
+          data: { failed_pin_attempts: 0 },
+        });
 
-          let wallet = await tx.wallet.findUnique({ where: { userId } });
-          if (!wallet) {
-            wallet = await tx.wallet.create({
-              data: {
-                id: crypto.randomUUID(),
-                userId,
-                currency: 'CDF',
-                balance: 0,
-                isActive: true,
-              },
-            });
-          }
-          if (!wallet.isActive)
-            throw new RpcException({
-              status: 'error',
-              message: this.i18nService.translate('wallet.wallet_inactive', lang),
-              statusCode: 403,
-            });
+        if (!u.account_number)
+          throw new RpcException({
+            status: 'error',
+            message: this.i18nService.translate('wallet.no_bank_account', lang),
+            statusCode: 400,
+          });
+        return u;
+      },
+      { timeout: 15000, maxWait: 5000 },
+    );
 
-          let bankResponse;
-          try {
-            bankResponse = await this.bankService.topup(
-              user.account_number,
-              amount,
-              undefined,
-              lang,
-            );
-          } catch (bankError) {
+    // ✅ Extraction hors closure — TypeScript comprend que c'est un string
+    const accountNumber: string = user.account_number!;
+
+    // ---- 3) Appel bancaire HORS transaction ----
+    let bankResponse;
+    try {
+      bankResponse = await this.bankService.topup(
+        accountNumber, // ✅ string garanti
+        amount,
+        undefined,
+        lang,
+      );
+    } catch (bankError) {
+      // Enregistrer l'échec dans une transaction courte séparée
+      await this.prisma.$transaction(
+        async (tx) => {
+          const w = await tx.wallet.findUnique({ where: { userId } });
+          if (w) {
             const failedTransaction = await tx.transaction.create({
               data: {
                 id: crypto.randomUUID(),
                 userId,
-                walletId: wallet.id,
+                walletId: w.id,
                 amount,
                 type: 'DEPOSIT',
                 status: 'FAILED',
@@ -1657,7 +1646,7 @@ export class WalletServiceService {
                   'wallet.failed_description',
                   lang,
                   {
-                    reason: `Alimentation : ${bankResponse?.message || this.i18nService.translate('wallet.bank_api_error', lang)}`,
+                    reason: `Alimentation : ${this.i18nService.translate('wallet.bank_api_error', lang)}`,
                   },
                 ),
                 movement: 'CREDIT',
@@ -1668,20 +1657,30 @@ export class WalletServiceService {
               'topUp_failed',
               { transaction: failedTransaction, error: bankError.message },
               ipAddress || null,
+              tx,
             );
-            throw new RpcException({
-              status: 'error',
-              message: this.i18nService.translate('wallet.bank_timeout', lang),
-              statusCode: 504,
-            });
           }
+        },
+        { timeout: 10000 },
+      );
+      throw new RpcException({
+        status: 'error',
+        message: this.i18nService.translate('wallet.bank_timeout', lang),
+        statusCode: 504,
+      });
+    }
 
-          if (bankResponse.error || !bankResponse.success) {
+    if (bankResponse.error || !bankResponse.success) {
+      // Enregistrer l'échec dans une transaction courte séparée
+      await this.prisma.$transaction(
+        async (tx) => {
+          const w = await tx.wallet.findUnique({ where: { userId } });
+          if (w) {
             const failedTransaction = await tx.transaction.create({
               data: {
                 id: crypto.randomUUID(),
                 userId,
-                walletId: wallet.id,
+                walletId: w.id,
                 amount,
                 type: 'DEPOSIT',
                 status: 'FAILED',
@@ -1701,85 +1700,106 @@ export class WalletServiceService {
               'topUp_failed',
               { transaction: failedTransaction, error: bankResponse.message },
               ipAddress || null,
+              tx,
             );
-            throw new RpcException({
-              status: 'error',
-              message: bankResponse.message || 'Bank topup failed',
-              statusCode: bankResponse.code || 400,
-            });
           }
+        },
+        { timeout: 10000 },
+      );
+      throw new RpcException({
+        status: 'error',
+        message: bankResponse.message || 'Bank topup failed',
+        statusCode: bankResponse.code || 400,
+      });
+    }
 
-          const updatedWallet = await tx.wallet.update({
-            where: { id: wallet.id },
-            data: { balance: { increment: amount }, updatedAt: new Date() },
-          });
-
-          let descriptionTemplate = this.i18nService.translate(
-            'wallet.transaction_description_deposit',
-            lang,
-          );
-          const description = descriptionTemplate.replace(
-            '{accountNumber}',
-            user.account_number,
-          );
-
-          const transaction = await tx.transaction.create({
+    // ---- 4) Mise à jour solde + création transaction (transaction COURTE) ----
+    const result = await this.prisma.$transaction(
+      async (tx) => {
+        let wallet = await tx.wallet.findUnique({ where: { userId } });
+        if (!wallet) {
+          wallet = await tx.wallet.create({
             data: {
               id: crypto.randomUUID(),
               userId,
-              walletId: wallet.id,
-              amount,
-              type: 'DEPOSIT',
-              status: 'SUCCESS',
-              reference: `TOPUP_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
-              description,
-              movement: 'CREDIT',
+              currency: 'CDF',
+              balance: 0,
+              isActive: true,
             },
           });
+        }
+        if (!wallet.isActive)
+          throw new RpcException({
+            status: 'error',
+            message: this.i18nService.translate('wallet.wallet_inactive', lang),
+            statusCode: 403,
+          });
 
-          await this.logAudit(user.id, 'topUp', transaction, ipAddress || null);
-          return { wallet: updatedWallet, transaction, user };
-        },
-        { timeout: 120000, maxWait: 120000 },
-      );
-
-      // ✅ CORRECTION: Utiliser await pour garantir l'envoi de la notification
-      try {
-        await notifyTransaction(
-          this.smsService,
-          this.notificationHelper,
-          this.i18nService,
-          this.shouldSendSms.bind(this),
-          this.shouldSendPush.bind(this),
-          this.getUserLanguage.bind(this),
-          result.transaction,
-          result.user,
-          result.wallet,
-          'topup',
-        );
-      } catch (err) {
-        console.error('[Notifications] topUp error:', err);
-      }
-
-      return {
-        message: this.i18nService.translate('wallet.top_up_success', lang),
-        data: {
-          wallet: this.toResponse(result.wallet),
-          transaction: result.transaction,
-        },
-      };
-    } catch (error) {
-      if (!(error instanceof RpcException)) {
-        throw new RpcException({
-          status: 'error',
-          message:
-            error.message ||
-            this.i18nService.translate('wallet.top_up_failed', lang),
-          statusCode: 500,
+        const updatedWallet = await tx.wallet.update({
+          where: { id: wallet.id },
+          data: { balance: { increment: amount }, updatedAt: new Date() },
         });
-      }
-      throw error;
-    }
+
+        const descriptionTemplate = this.i18nService.translate(
+          'wallet.transaction_description_deposit',
+          lang,
+        );
+        const description = descriptionTemplate.replace(
+          '{accountNumber}',
+          accountNumber, // ✅ string garanti
+        );
+
+        const transaction = await tx.transaction.create({
+          data: {
+            id: crypto.randomUUID(),
+            userId,
+            walletId: wallet.id,
+            amount,
+            type: 'DEPOSIT',
+            status: 'SUCCESS',
+            reference: `TOPUP_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
+            description,
+            movement: 'CREDIT',
+          },
+        });
+
+        await this.logAudit(
+          user.id,
+          'topUp',
+          transaction,
+          ipAddress || null,
+          tx,
+        );
+        return { wallet: updatedWallet, transaction, user };
+      },
+      { timeout: 15000, maxWait: 5000 },
+    );
+
+    // ---- 5) Notifications en arrière-plan (ne bloque pas la réponse) ----
+    setImmediate(() => {
+      notifyTransaction(
+        this.smsService,
+        this.notificationHelper,
+        this.i18nService,
+        this.shouldSendSms.bind(this),
+        this.shouldSendPush.bind(this),
+        this.getUserLanguage.bind(this),
+        result.transaction,
+        result.user,
+        result.wallet,
+        'topup',
+      ).catch((err) => {
+        console.error('[Notifications async] topUp error:', err);
+      });
+    });
+
+    return {
+      message: this.i18nService.translate('wallet.top_up_success', lang),
+      data: {
+        wallet: this.toResponse(result.wallet),
+        transaction: result.transaction,
+      },
+    };
   }
 
   async cashout(
@@ -1795,18 +1815,32 @@ export class WalletServiceService {
       amount,
       lang,
     });
-    if (amount <= 0) {
+
+    // ---- 1) Validations rapides (hors transaction) ----
+    if (amount <= 0)
       throw new RpcException({
         status: 'error',
         message: this.i18nService.translate('wallet.amount_positive', lang),
         statusCode: 400,
       });
-    }
+    if (!pin || pin.length < 4)
+      throw new RpcException({
+        status: 'error',
+        message: this.i18nService.translate('wallet.pin_min_length', lang),
+        statusCode: 400,
+      });
+    if (!/^\d+$/.test(pin))
+      throw new RpcException({
+        status: 'error',
+        message: this.i18nService.translate('wallet.pin_digits_only', lang),
+        statusCode: 400,
+      });
 
     try {
-      const result = await this.prisma.$transaction(
+      // ---- 2) Vérif PIN + user + wallet (transaction COURTE) ----
+      const user = await this.prisma.$transaction(
         async (tx) => {
-          const user = await tx.user.findUnique({
+          const u = await tx.user.findUnique({
             where: { id: userId },
             select: {
               id: true,
@@ -1819,31 +1853,31 @@ export class WalletServiceService {
               failed_pin_attempts: true,
             },
           });
-          if (!user)
+          if (!u)
             throw new RpcException({
               status: 'error',
               message: this.i18nService.translate('wallet.user_not_found', lang),
               statusCode: 404,
             });
 
-          if (user.status === user_status.BLOCKED) {
-            const message = this.i18nService.translate('account_blocked_admin', lang);
+          if (u.status === user_status.BLOCKED)
             throw new RpcException({
               status: 'error',
-              message,
+              message: this.i18nService.translate('account_blocked_admin', lang),
               statusCode: 403,
             });
-          }
 
-          if (user.role === 'MERCHANT' && user.account_number !== accountNumber) {
+          if (u.role === 'MERCHANT' && u.account_number !== accountNumber)
             throw new RpcException({
               status: 'error',
-              message: this.i18nService.translate('wallet.cashout_merchant_restriction', lang),
+              message: this.i18nService.translate(
+                'wallet.cashout_merchant_restriction',
+                lang,
+              ),
               statusCode: 403,
             });
-          }
 
-          if (!user.pin)
+          if (!u.pin)
             throw new RpcException({
               status: 'error',
               message: this.i18nService.translate('wallet.no_pin_set', lang),
@@ -1851,9 +1885,9 @@ export class WalletServiceService {
             });
 
           const hashedPin = crypto.createHash('sha256').update(pin).digest('hex');
-          if (user.pin !== hashedPin) {
-            const newAttempts = (user.failed_pin_attempts || 0) + 1;
-            let newStatus: user_status = user.status;
+          if (u.pin !== hashedPin) {
+            const newAttempts = (u.failed_pin_attempts || 0) + 1;
+            let newStatus: user_status = u.status;
             let lockedUntil: Date | null = null;
             if (newAttempts >= 5) {
               newStatus = user_status.BLOCKED;
@@ -1861,15 +1895,12 @@ export class WalletServiceService {
             }
             await tx.user.update({
               where: { id: userId },
-              data: {
-                failed_pin_attempts: newAttempts,
-                status: newStatus,
-              },
+              data: { failed_pin_attempts: newAttempts, status: newStatus },
             });
             await logFailedLoginAttempt(
-              this.prisma,
-              user.id,
-              user.account_number ?? user.phone ?? user.id,
+              tx as any,
+              u.id,
+              u.account_number ?? u.phone ?? u.id,
               ipAddress,
               undefined,
               newAttempts,
@@ -1887,6 +1918,144 @@ export class WalletServiceService {
             data: { failed_pin_attempts: 0 },
           });
 
+          const w = await tx.wallet.findUnique({ where: { userId } });
+          if (!w)
+            throw new RpcException({
+              status: 'error',
+              message: this.i18nService.translate('wallet.wallet_not_found', lang),
+              statusCode: 404,
+            });
+          if (!w.isActive)
+            throw new RpcException({
+              status: 'error',
+              message: this.i18nService.translate('wallet.wallet_inactive', lang),
+              statusCode: 403,
+            });
+          if (w.balance < amount)
+            throw new RpcException({
+              status: 'error',
+              message: this.i18nService.translate(
+                'wallet.insufficient_wallet_balance',
+                lang,
+              ),
+              statusCode: 400,
+            });
+
+          return u;
+        },
+        { timeout: 15000, maxWait: 5000 }, // ✅ court
+      );
+
+      // ---- 3) Appel bancaire HORS transaction ----
+      let bankResponse;
+      try {
+        bankResponse = await this.bankService.cashout(
+          accountNumber,
+          amount,
+          undefined,
+          lang,
+        );
+      } catch (bankError) {
+        // Log d'échec dans une transaction courte séparée
+        await this.prisma.$transaction(
+          async (tx) => {
+            const w = await tx.wallet.findUnique({ where: { userId } });
+            if (w) {
+              const failedTransaction = await tx.transaction.create({
+                data: {
+                  id: crypto.randomUUID(),
+                  userId,
+                  walletId: w.id,
+                  amount,
+                  type: 'WITHDRAW',
+                  status: 'FAILED',
+                  reference: `CASHOUT_FAILED_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
+                  description: this.i18nService.translate(
+                    'wallet.failed_description',
+                    lang,
+                    {
+                      reason: `Retrait : ${(bankError as any)?.error?.message ||
+                        (bankError as any)?.message ||
+                        this.i18nService.translate('wallet.bank_api_error', lang)
+                        }`,
+                    },
+                  ),
+                  movement: 'DEBIT',
+                },
+              });
+              await this.logAudit(
+                user.id,
+                'cashout_failed',
+                { transaction: failedTransaction, error: bankError.message },
+                ipAddress || null,
+                tx,
+              );
+            }
+          },
+          { timeout: 10000 },
+        );
+
+        // ✅ Propager le message du BankService (déjà traduit)
+        const errorMessage =
+          (bankError as any)?.error?.message ||
+          (bankError as any)?.message ||
+          this.i18nService.translate('wallet.bank_timeout', lang);
+
+        throw new RpcException({
+          status: 'error',
+          message: errorMessage,
+          statusCode: (bankError as any)?.error?.statusCode || 504,
+        });
+      }
+
+      if (bankResponse.error || !bankResponse.success) {
+        await this.prisma.$transaction(
+          async (tx) => {
+            const w = await tx.wallet.findUnique({ where: { userId } });
+            if (w) {
+              const failedTransaction = await tx.transaction.create({
+                data: {
+                  id: crypto.randomUUID(),
+                  userId,
+                  walletId: w.id,
+                  amount,
+                  type: 'WITHDRAW',
+                  status: 'FAILED',
+                  reference: `CASHOUT_FAILED_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
+                  description: this.i18nService.translate(
+                    'wallet.failed_description',
+                    lang,
+                    {
+                      reason: `Retrait : ${bankResponse.message ||
+                        this.i18nService.translate('wallet.bank_api_error', lang)
+                        }`,
+                    },
+                  ),
+                  movement: 'DEBIT',
+                },
+              });
+              await this.logAudit(
+                user.id,
+                'cashout_failed',
+                { transaction: failedTransaction, error: bankResponse.message },
+                ipAddress || null,
+                tx,
+              );
+            }
+          },
+          { timeout: 10000 },
+        );
+
+        throw new RpcException({
+          status: 'error',
+          message: bankResponse.message || 'Bank cashout failed',
+          statusCode: bankResponse.code || 400,
+        });
+      }
+
+      // ---- 4) Mise à jour solde + création transaction (transaction COURTE) ----
+      const result = await this.prisma.$transaction(
+        async (tx) => {
           const wallet = await tx.wallet.findUnique({ where: { userId } });
           if (!wallet)
             throw new RpcException({
@@ -1903,94 +2072,26 @@ export class WalletServiceService {
           if (wallet.balance < amount)
             throw new RpcException({
               status: 'error',
-              message: this.i18nService.translate('wallet.insufficient_wallet_balance', lang),
+              message: this.i18nService.translate(
+                'wallet.insufficient_wallet_balance',
+                lang,
+              ),
               statusCode: 400,
             });
-
-          let bankResponse;
-          try {
-            bankResponse = await this.bankService.cashout(
-              accountNumber,
-              amount,
-              undefined,
-              lang,
-            );
-          } catch (bankError) {
-            const failedTransaction = await tx.transaction.create({
-              data: {
-                id: crypto.randomUUID(),
-                userId,
-                walletId: wallet.id,
-                amount,
-                type: 'WITHDRAW',
-                status: 'FAILED',
-                reference: `CASHOUT_FAILED_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
-                description: this.i18nService.translate(
-                  'wallet.failed_description',
-                  lang,
-                  {
-                    reason: `Retrait : ${bankResponse?.message || this.i18nService.translate('wallet.bank_api_error', lang)}`,
-                  },
-                ),
-                movement: 'DEBIT',
-              },
-            });
-            await this.logAudit(
-              user.id,
-              'cashout_failed',
-              { transaction: failedTransaction, error: bankError.message },
-              ipAddress || null,
-            );
-            throw new RpcException({
-              status: 'error',
-              message: this.i18nService.translate('wallet.bank_timeout', lang),
-              statusCode: 504,
-            });
-          }
-
-          if (bankResponse.error || !bankResponse.success) {
-            const failedTransaction = await tx.transaction.create({
-              data: {
-                id: crypto.randomUUID(),
-                userId,
-                walletId: wallet.id,
-                amount,
-                type: 'WITHDRAW',
-                status: 'FAILED',
-                reference: `CASHOUT_FAILED_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`,
-                description: this.i18nService.translate(
-                  'wallet.failed_description',
-                  lang,
-                  {
-                    reason: `Retrait : ${bankResponse.message || this.i18nService.translate('wallet.bank_api_error', lang)}`,
-                  },
-                ),
-                movement: 'DEBIT',
-              },
-            });
-            await this.logAudit(
-              user.id,
-              'cashout_failed',
-              { transaction: failedTransaction, error: bankResponse.message },
-              ipAddress || null,
-            );
-            throw new RpcException({
-              status: 'error',
-              message: bankResponse.message || 'Bank cashout failed',
-              statusCode: bankResponse.code || 400,
-            });
-          }
 
           const updatedWallet = await tx.wallet.update({
             where: { id: wallet.id },
             data: { balance: { decrement: amount }, updatedAt: new Date() },
           });
 
-          let descriptionTemplate = this.i18nService.translate(
+          const descriptionTemplate = this.i18nService.translate(
             'wallet.transaction_description_withdraw',
             lang,
           );
-          const description = descriptionTemplate.replace('{accountNumber}', accountNumber);
+          const description = descriptionTemplate.replace(
+            '{accountNumber}',
+            accountNumber,
+          );
 
           const transaction = await tx.transaction.create({
             data: {
@@ -2006,15 +2107,21 @@ export class WalletServiceService {
             },
           });
 
-          await this.logAudit(user.id, 'cashout', { transaction }, ipAddress ?? null);
+          await this.logAudit(
+            user.id,
+            'cashout',
+            { transaction },
+            ipAddress ?? null,
+            tx,
+          );
           return { wallet: updatedWallet, transaction, user };
         },
-        { timeout: 120000, maxWait: 120000 },
+        { timeout: 15000, maxWait: 5000 }, // ✅ court
       );
 
-      // ✅ CORRECTION: Utiliser await pour garantir l'envoi de la notification
-      try {
-        await notifyTransaction(
+      // ---- 5) Notifications en arrière-plan ----
+      setImmediate(() => {
+        notifyTransaction(
           this.smsService,
           this.notificationHelper,
           this.i18nService,
@@ -2025,10 +2132,10 @@ export class WalletServiceService {
           result.user,
           result.wallet,
           'cashout',
-        );
-      } catch (err) {
-        console.error('[Notifications] cashout error:', err);
-      }
+        ).catch((err) => {
+          console.error('[Notifications async] cashout error:', err);
+        });
+      });
 
       return {
         message: this.i18nService.translate('wallet.cashout_success', lang),
