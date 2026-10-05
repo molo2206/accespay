@@ -2708,4 +2708,52 @@ export class ApiGatewayController {
       status,
     );
   }
+
+  @Delete('users/me/account')
+  @UseGuards(JwtAuthGuard, AuthentificationGuard)
+  async deleteMyAccount(
+    @CurrentUser() currentUser: any,
+    @Body() body: { password: string },
+    @Headers('lang') langHeader?: string,
+  ): Promise<{ message: string; data: any }> {
+    this.logger.log(`🗑️ Delete own account: ${currentUser?.id}`);
+
+    // Vérification de l'authentification
+    if (!currentUser?.id) {
+      throw new HttpException(
+        'Utilisateur non authentifié',
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+
+    // Vérification du mot de passe
+    if (!body?.password || body.password.trim() === '') {
+      throw new HttpException(
+        'Le mot de passe est requis pour supprimer votre compte',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    // Gestion de la langue
+    const allowedLangs = ['fr', 'en', 'sw'];
+    const lang = allowedLangs.includes(langHeader || '') ? langHeader : 'fr';
+
+    // Appel au microservice user-service
+    const response = await this.sendUserMessage<{
+      message: string;
+      data: any;
+    }>(
+      'delete_own_account',
+      {
+        id: currentUser.id,
+        password: body.password,
+        lang,
+      },
+      'Échec de la suppression du compte',
+      HttpStatus.BAD_REQUEST,
+      120000,
+    );
+
+    return response;
+  }
 }

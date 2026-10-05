@@ -1638,4 +1638,149 @@ export class UserServiceService {
       data: settings,
     };
   }
+
+  // ========================= DELETE OWN ACCOUNT =========================
+  async deleteOwnAccount(
+    userId: string,
+    password: string,
+    lang: string = 'fr',
+  ): Promise<{ message: string; data: any }> {
+    console.log(
+      `[deleteOwnAccount] Langue utilisée : ${lang} pour l'utilisateur ${userId}`,
+    );
+
+    // 1. Vérifier que le mot de passe est fourni
+    if (!password) {
+      throw new RpcException({
+        status: 'error',
+        message: this.i18nService.translate(
+          'user.delete_account_password_required',
+          lang,
+        ),
+        statusCode: 400,
+      });
+    }
+
+    // 2. Récupérer l'utilisateur
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        full_name: true,
+        email: true,
+        phone: true,
+        deleted: true,
+        status: true,
+        role: true,
+        password: true,
+      },
+    });
+
+    if (!user) {
+      throw new RpcException({
+        status: 'error',
+        message: this.i18nService.translate('user.user_not_found', lang),
+        statusCode: 404,
+      });
+    }
+
+    // 3. Empêcher la suppression des comptes ADMIN / SUPER_ADMIN
+    if (user.role === user_role.ADMIN || user.role === user_role.SUPER_ADMIN) {
+      throw new RpcException({
+        status: 'error',
+        message: this.i18nService.translate(
+          'user.admin_cannot_self_delete',
+          lang,
+        ),
+        statusCode: 403,
+      });
+    }
+
+    // 4. Vérifier si le compte n'est pas déjà supprimé
+    if (user.deleted) {
+      throw new RpcException({
+        status: 'error',
+        message: this.i18nService.translate(
+          'user.account_already_deleted',
+          lang,
+        ),
+        statusCode: 400,
+      });
+    }
+
+    // 5. Vérifier que le mot de passe existe
+    if (!user.password) {
+      throw new RpcException({
+        status: 'error',
+        message: this.i18nService.translate('user.password_not_set', lang),
+        statusCode: 400,
+      });
+    }
+
+    // 6. Comparer le mot de passe
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      throw new RpcException({
+        status: 'error',
+        message: this.i18nService.translate('user.password_incorrect', lang),
+        statusCode: 400,
+      });
+    }
+
+    // 7. Soft delete + passage en INACTIVE
+    const savedUser = await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        deleted: true,
+        status: user_status.INACTIVE,
+        updatedAt: new Date(),
+      },
+      select: {
+        id: true,
+        full_name: true,
+        email: true,
+        phone: true,
+        deleted: true,
+      },
+    });
+
+    // 8. Audit
+    await this.logAudit(
+      savedUser.id,
+      'DELETE_OWN_ACCOUNT',
+      { identifier: savedUser },
+      null,
+    );
+
+    // 9. SMS de confirmation (optionnel)
+    if (savedUser.phone) {
+      try {
+        const cleanPhone = savedUser.phone.replace(/[^0-9+]/g, '');
+        await this.smsService.sendSms(
+          cleanPhone,
+          this.i18nService.translate('user.account_deleted_sms', lang),
+        );
+      } catch (smsErr) {
+        console.error(
+          `SMS suppression non envoyé à ${savedUser.phone}:`,
+          smsErr.message,
+        );
+      }
+    }
+
+    // 10. Retour au format souhaité
+    return {
+      message: this.i18nService.translate(
+        'user.account_deleted_success',
+        lang,
+      ),
+      data: {
+        id: savedUser.id,
+        fullName: savedUser.full_name,
+        email: savedUser.email,
+        phone: savedUser.phone,
+        deleted: savedUser.deleted,
+      },
+    };
+  }
 }

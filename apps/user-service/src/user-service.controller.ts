@@ -20,7 +20,7 @@ import { UpsertAppSettingsDto } from './dto/app-settings.dto';
 
 @Controller()
 export class UserServiceController {
-  constructor(private readonly userService: UserServiceService) {}
+  constructor(private readonly userService: UserServiceService) { }
 
   // ==================== COMMANDES AVEC TRADUCTION ====================
 
@@ -421,6 +421,29 @@ export class UserServiceController {
         status: 'error',
         message: error.message,
         statusCode: 500,
+      });
+    }
+  }
+
+  @MessagePattern('delete_own_account')
+  async deleteOwnAccount(
+    @Payload() data: { id: string; password: string; lang?: string },
+  ) {
+    const lang = data.lang || 'fr';
+    console.log('🔍 Langue reçue par delete_own_account :', lang);
+
+    try {
+      return await this.userService.deleteOwnAccount(
+        data.id,
+        data.password,
+        lang,
+      );
+    } catch (error) {
+      if (error instanceof RpcException) throw error;
+      throw new RpcException({
+        status: 'error',
+        message: error instanceof Error ? error.message : 'Unknown error',
+        statusCode: 400,
       });
     }
   }
