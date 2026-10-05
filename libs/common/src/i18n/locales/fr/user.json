@@ -1,7 +1,7 @@
 {
   "email_already_exists": "Cet email existe déjà",
   "phone_already_exists": "Ce numéro de téléphone existe déjà",
-  "user_already_exists_with_phone_and_role": "Un utilisateur avec le rôle {role} existe déjà avec ce numéro de téléphone.",
+  "user_already_exists_with_phone_and_role": "Un utilisateur avec le rôle {{role}} existe déjà avec ce numéro de téléphone.",
   "account_not_found": "Le compte bancaire {{account}} est introuvable",
   "name_mismatch": "Le nom complet doit correspondre à celui associé au compte",
   "phone_mismatch": "Le numéro de téléphone doit correspondre à celui associé au compte",
@@ -22,7 +22,6 @@
   "old_pin_incorrect": "Ancien PIN incorrect",
   "pin_valid": "PIN valide",
   "pin_invalid": "PIN incorrect",
-
   "welcome_email_title": "Bienvenue dans votre portefeuille",
   "welcome_email_greeting": "Bonjour {{name}} 👋",
   "welcome_email_message": "Félicitations ! Votre compte ACCESPAY est maintenant actif.",
@@ -35,7 +34,14 @@
   "welcome_email_footer": "ACCESPAY – Votre argent, en toute sécurité",
   "email_sent_to": "Cet email a été envoyé à",
   "cannot_change_own_status": "Vous ne pouvez pas modifier votre propre statut",
-  "profile_update_sms": "Bonjour {full_name}, vos informations de profil (compte {account_number}) ont été mises à jour avec succès.",
+  "profile_update_sms": "Bonjour {{full_name}}, vos informations de profil (compte {{account_number}}) ont été mises à jour avec succès.",
   "password_changed_sms": "Votre mot de passe a été modifié. Si vous n'êtes pas à l'origine de cette modification, contactez immédiatement le support.",
-  "pin_changed_sms": "Votre code PIN a été modifié."
+  "pin_changed_sms": "Votre code PIN a été modifié.",
+  "delete_account_password_required": "Le mot de passe est requis pour supprimer votre compte",
+  "password_incorrect": "Mot de passe incorrect",
+  "password_not_set": "Aucun mot de passe n'est défini pour ce compte",
+  "account_already_deleted": "Ce compte a déjà été supprimé",
+  "admin_cannot_self_delete": "Un compte administrateur ne peut pas être supprimé via cette méthode",
+  "account_deleted_success": "Votre compte a été supprimé avec succès",
+  "account_deleted_sms": "Votre compte a été supprimé avec succès. Merci d'avoir utilisé nos services."
 }

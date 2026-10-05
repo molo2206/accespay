@@ -1639,7 +1639,6 @@ export class UserServiceService {
     };
   }
 
-  // ========================= DELETE OWN ACCOUNT =========================
   async deleteOwnAccount(
     userId: string,
     password: string,
@@ -1654,7 +1653,7 @@ export class UserServiceService {
       throw new RpcException({
         status: 'error',
         message: this.i18nService.translate(
-          'user.delete_account_password_required',
+          'delete_account_password_required',
           lang,
         ),
         statusCode: 400,
@@ -1679,7 +1678,7 @@ export class UserServiceService {
     if (!user) {
       throw new RpcException({
         status: 'error',
-        message: this.i18nService.translate('user.user_not_found', lang),
+        message: this.i18nService.translate('user_not_found', lang),
         statusCode: 404,
       });
     }
@@ -1688,10 +1687,7 @@ export class UserServiceService {
     if (user.role === user_role.ADMIN || user.role === user_role.SUPER_ADMIN) {
       throw new RpcException({
         status: 'error',
-        message: this.i18nService.translate(
-          'user.admin_cannot_self_delete',
-          lang,
-        ),
+        message: this.i18nService.translate('admin_cannot_self_delete', lang),
         statusCode: 403,
       });
     }
@@ -1700,10 +1696,7 @@ export class UserServiceService {
     if (user.deleted) {
       throw new RpcException({
         status: 'error',
-        message: this.i18nService.translate(
-          'user.account_already_deleted',
-          lang,
-        ),
+        message: this.i18nService.translate('account_already_deleted', lang),
         statusCode: 400,
       });
     }
@@ -1712,7 +1705,7 @@ export class UserServiceService {
     if (!user.password) {
       throw new RpcException({
         status: 'error',
-        message: this.i18nService.translate('user.password_not_set', lang),
+        message: this.i18nService.translate('password_not_set', lang),
         statusCode: 400,
       });
     }
@@ -1722,7 +1715,7 @@ export class UserServiceService {
     if (!isPasswordValid) {
       throw new RpcException({
         status: 'error',
-        message: this.i18nService.translate('user.password_incorrect', lang),
+        message: this.i18nService.translate('password_incorrect', lang),
         statusCode: 400,
       });
     }
@@ -1752,13 +1745,13 @@ export class UserServiceService {
       null,
     );
 
-    // 9. SMS de confirmation (optionnel)
+    // 9. SMS de confirmation
     if (savedUser.phone) {
       try {
         const cleanPhone = savedUser.phone.replace(/[^0-9+]/g, '');
         await this.smsService.sendSms(
           cleanPhone,
-          this.i18nService.translate('user.account_deleted_sms', lang),
+          this.i18nService.translate('account_deleted_sms', lang),
         );
       } catch (smsErr) {
         console.error(
@@ -1768,12 +1761,9 @@ export class UserServiceService {
       }
     }
 
-    // 10. Retour au format souhaité
+    // 10. Retour
     return {
-      message: this.i18nService.translate(
-        'user.account_deleted_success',
-        lang,
-      ),
+      message: this.i18nService.translate('account_deleted_success', lang),
       data: {
         id: savedUser.id,
         fullName: savedUser.full_name,
