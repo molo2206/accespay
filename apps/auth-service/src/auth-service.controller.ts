@@ -19,7 +19,7 @@ import { RmqAuthGuard } from './utility/guards/rmq-auth.guard';
 
 @Controller()
 export class AuthServiceController {
-  constructor(private readonly authService: AuthServiceService) {}
+  constructor(private readonly authService: AuthServiceService) { }
 
   @MessagePattern('login_user')
   async login(@Payload() data: LoginUserDto & { ipAddress?: string }) {
@@ -274,6 +274,11 @@ export class AuthServiceController {
   @MessagePattern('get_UserStatus')
   async getUserStatus(@Payload() data: { userId: string }) {
     return this.authService.getUserStatus(data.userId);
+  }
+
+  @MessagePattern('get_UserDeletedStatus')
+  async getUserDeletedStatus(@Payload() data: { userId: string }) {
+    return this.authService.getUserDeletedStatus(data.userId);
   }
 
   @MessagePattern('get_session_by_id')

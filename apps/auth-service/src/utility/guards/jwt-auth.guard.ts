@@ -52,7 +52,6 @@ export class JwtAuthGuard implements CanActivate {
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       if (isLogoutRoute) {
-        // Pour logout, on accepte l'absence de token (déjà déconnecté)
         return true;
       }
       throw new UnauthorizedException('Token manquant');
@@ -64,7 +63,6 @@ export class JwtAuthGuard implements CanActivate {
       const secretKey =
         this.configService.get<string>('JWT_SECRET') || 'secret';
 
-      // Pour logout, on ignore l'expiration du token
       const options: any = {};
       if (isLogoutRoute) {
         options.ignoreExpiration = true;
@@ -89,6 +87,42 @@ export class JwtAuthGuard implements CanActivate {
           console.error('Erreur lors de la récupération du statut:', err);
           throw new UnauthorizedException(
             'Impossible de vérifier le statut du compte',
+          );
+        }
+      }
+
+      // ✅ NOUVEAU : vérifier si le compte a été supprimé (soft delete)
+      // Rétrocompatible : si le pattern n'existe pas côté auth-service,
+      // on ignore silencieusement et on continue.
+      if (!isLogoutRoute) {
+        try {
+          const deletedResponse = await firstValueFrom(
+            this.authClient
+              .send('get_UserDeletedStatus', { userId: payload.id })
+              .pipe(timeout(5000)),
+          );
+
+          // Accepte plusieurs formats : boolean, objet { deleted }, ou string 'true'
+          const isDeleted =
+            deletedResponse === true ||
+            deletedResponse === 'true' ||
+            deletedResponse?.deleted === true;
+
+          if (isDeleted) {
+            throw new HttpException(
+              this.i18nService.translate('account_deleted', lang),
+              HttpStatus.FORBIDDEN,
+            );
+          }
+        } catch (err) {
+          // Si c'est notre propre HttpException (compte supprimé) → on la propage
+          if (err instanceof HttpException) {
+            throw err;
+          }
+          // Sinon (pattern non implémenté, timeout, etc.) → on ignore
+          console.warn(
+            'get_UserDeletedStatus indisponible, on continue:',
+            err?.message,
           );
         }
       }
@@ -141,7 +175,7 @@ export class JwtAuthGuard implements CanActivate {
         }
       }
 
-      // Attacher l'utilisateur à la requête
+      // Attacher l'utilisateur à la requête (STRUCTURE INCHANGÉE)
       request.currentUser = {
         id: payload.id,
         email: payload.email ?? null,
@@ -158,9 +192,7 @@ export class JwtAuthGuard implements CanActivate {
 
       return true;
     } catch (err) {
-      // En cas d'erreur sur logout, on laisse passer (on considère que la déconnexion est possible)
       if (isLogoutRoute) {
-        // On peut tout de même attacher un utilisateur minimal si besoin
         request.currentUser = { id: null };
         return true;
       }

@@ -96,6 +96,7 @@ export class RmqAuthGuard implements CanActivate {
           role: (payload as any).role,
           status: (payload as any).status,
           account_number: (payload as any).account_number,
+          deleted: (payload as any).deleted ?? false, // ✅ ajouté
           createdAt: new Date(),
           updatedAt: new Date(),
         };

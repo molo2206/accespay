@@ -43,7 +43,7 @@ export class AuthServiceService {
     private readonly mailService: MailService,
     private readonly i18nService: I18nService,
     private readonly bankService: BankService,
-  ) {}
+  ) { }
 
   private normalizePhone(phone: string): string {
     return phone.replace(/[^0-9]/g, '');
@@ -674,6 +674,25 @@ export class AuthServiceService {
       await this.prisma.sessions.delete({ where: { id: session.id } });
     }
     return { message: this.i18nService.translate('logout_success', lang) };
+  }
+
+  async getUserDeletedStatus(
+    userId: string,
+  ): Promise<{ deleted: boolean }> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { deleted: true },
+    });
+
+    if (!user) {
+      throw new RpcException({
+        status: 'error',
+        message: 'User not found',
+        statusCode: 404,
+      });
+    }
+
+    return { deleted: user.deleted ?? false };
   }
 
   async verifyOtp(

@@ -1720,12 +1720,11 @@ export class UserServiceService {
       });
     }
 
-    // 7. Soft delete + passage en INACTIVE
+    // 7. Soft delete uniquement (le status reste inchangé)
     const savedUser = await this.prisma.user.update({
       where: { id: userId },
       data: {
         deleted: true,
-        status: user_status.INACTIVE,
         updatedAt: new Date(),
       },
       select: {
