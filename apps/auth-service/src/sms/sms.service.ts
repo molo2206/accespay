@@ -5,18 +5,21 @@ import axios from 'axios';
 // Définir le type de réponse de l'API Dream Digital
 interface DreamDigitalSmsResponse {
   status: string;                 // 'S' pour succès, 'E' pour erreur
-  message_id?: string | number;   // ID du message (nombre dans la vraie réponse)
-  remarks?: string;               // ex: "Message Submitted"
-  phonenumber?: string;
+  message_id?: string | number;   // ID du message (présent en cas de succès)
   description?: string;           // Description de l'erreur (en cas d'échec)
+  // Ajoutez d'autres champs si nécessaire
 }
 
 @Injectable()
 export class SmsService {
+  // private readonly apiId = 'API23108080245';
+  // private readonly apiPassword = 'V90ae6RB3p';
+  // private readonly sender = 'AccesPay';
+  // private readonly apiUrl = 'https://api2.dream-digital.info/api/SendSMS';
   private readonly apiId = 'API42928758643';
   private readonly apiPassword = '@@Accesfina!2026';
-  private readonly sender = 'SMS-TEST'; // ✅ identique à l'URL qui fonctionne
-  private readonly apiUrl = 'https://papi.dream-digital.info/api/SendSms'; // ✅ URL qui fonctionne
+  private readonly sender = 'SMS-TEST';
+  private readonly apiUrl = 'https://papi.dream-digital.info/api/SendSms';
 
   async sendSms(phoneNumber: string, message: string): Promise<boolean> {
     try {
@@ -41,21 +44,14 @@ export class SmsService {
       }
 
       // Construire l'URL EXACTEMENT comme celle qui fonctionne
-      // (encoding vide, sender_id = SMS-TEST, host = papi.dream-digital.info, path = SendSms)
-      const url =
-        `${this.apiUrl}?api_id=${this.apiId}` +
-        `&api_password=${this.apiPassword}` +
-        `&sms_type=T` +
-        `&encoding=` +
-        `&sender_id=${this.sender}` +
-        `&phonenumber=${cleanPhone}` +
-        `&textmessage=${encodeURIComponent(message)}`;
+      const url = `${this.apiUrl}?api_id=${this.apiId}&api_password=${this.apiPassword}&sms_type=T&encoding=&sender_id=${this.sender}&phonenumber=${cleanPhone}&textmessage=${encodeURIComponent(message)}`;
 
       console.log(
         '📤 Envoi SMS avec URL:',
         url.replace(this.apiPassword, '***'),
       );
 
+      // 🔥 AJOUT : Typer la réponse avec l'interface
       const response = await axios.get<DreamDigitalSmsResponse>(url, {
         timeout: 30000,
         headers: {
@@ -66,6 +62,7 @@ export class SmsService {
 
       console.log('📥 Réponse API:', response.data);
 
+      // Maintenant TypeScript connaît response.data.status et response.data.message_id
       if (response.data && response.data.status === 'S') {
         console.log(
           `✅ SMS envoyé avec succès! ID: ${response.data.message_id || 'N/A'}`,
@@ -75,9 +72,9 @@ export class SmsService {
         console.error('❌ Échec envoi SMS:', response.data);
         return false;
       }
-    } catch (error: any) {
-      console.error("❌ Erreur lors de l'envoi SMS:", error?.message);
-      if (error?.response) {
+    } catch (error) {
+      console.error("❌ Erreur lors de l'envoi SMS:", error.message);
+      if (error.response) {
         console.error('   Status:', error.response.status);
         console.error('   Data:', error.response.data);
       }
