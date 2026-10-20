@@ -1161,8 +1161,8 @@ export class AuthServiceService {
       branch?: string | null;
       status?: string;
       deleted?: boolean | null;
-      createdAt?: Date;
-      updatedAt?: Date;
+      createdAt?: Date | null;
+      updatedAt?: Date | null;
       fcmToken?: string | null;
       pin?: string | null;
       passwordStatus?: string | null;
@@ -1213,8 +1213,8 @@ export class AuthServiceService {
         businessName: user.businessName || null,
         status: (user.status as any) || 'ACTIVE',
         deleted: user.deleted || false,
-        createdAt: user.createdAt || new Date(),
-        updatedAt: user.updatedAt || new Date(),
+        createdAt: user.createdAt ?? new Date(),
+        updatedAt: user.updatedAt ?? new Date(),
       },
       message,
     };
