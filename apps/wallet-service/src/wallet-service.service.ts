@@ -324,7 +324,7 @@ export class WalletServiceService {
             message: 'Wallet is inactive',
             statusCode: 403,
           });
-        if (current.balance < data.amount)
+        if ((current.balance ?? 0) < data.amount)
           throw new RpcException({
             status: 'error',
             message: 'Insufficient balance',
@@ -396,7 +396,7 @@ export class WalletServiceService {
             message: 'Sender wallet is inactive',
             statusCode: 403,
           });
-        if (fromWallet.balance < data.amount)
+        if ((fromWallet.balance ?? 0) < data.amount)
           throw new RpcException({
             status: 'error',
             message: 'Insufficient balance',
@@ -521,7 +521,7 @@ export class WalletServiceService {
             ),
             statusCode: 404,
           });
-        if (account.balance < amount)
+        if ((account.balance ?? 0) < amount)
           throw new RpcException({
             status: 'error',
             message: this.i18nService.translate(
@@ -661,7 +661,7 @@ export class WalletServiceService {
             message: this.i18nService.translate('wallet.wallet_inactive', lang),
             statusCode: 403,
           });
-        if (wallet.balance < amount)
+        if ((wallet.balance ?? 0) < amount)
           throw new RpcException({
             status: 'error',
             message: this.i18nService.translate(
@@ -822,7 +822,7 @@ export class WalletServiceService {
             message: this.i18nService.translate('wallet.wallet_inactive', lang),
             statusCode: 403,
           });
-        if (fromWallet.balance < amount)
+        if ((fromWallet.balance ?? 0) < amount)
           throw new RpcException({
             status: 'error',
             message: this.i18nService.translate(
@@ -1931,7 +1931,7 @@ export class WalletServiceService {
               message: this.i18nService.translate('wallet.wallet_inactive', lang),
               statusCode: 403,
             });
-          if (w.balance < amount)
+          if ((w.balance ?? 0) < amount)
             throw new RpcException({
               status: 'error',
               message: this.i18nService.translate(
@@ -2069,7 +2069,7 @@ export class WalletServiceService {
               message: this.i18nService.translate('wallet.wallet_inactive', lang),
               statusCode: 403,
             });
-          if (wallet.balance < amount)
+          if ((wallet.balance ?? 0) < amount)
             throw new RpcException({
               status: 'error',
               message: this.i18nService.translate(
@@ -2291,7 +2291,7 @@ export class WalletServiceService {
             message: this.i18nService.translate('wallet.wallet_inactive', lang),
             statusCode: 403,
           });
-        if (fromWallet.balance < amount)
+        if ((fromWallet.balance ?? 0) < amount)
           throw new RpcException({
             status: 'error',
             message: this.i18nService.translate('wallet.insufficient_wallet_balance', lang),
@@ -3012,7 +3012,7 @@ export class WalletServiceService {
         description,
         detail: tx.description || '',
         reference: tx.reference || tx.id.slice(0, 8),
-        date: tx.createdAt.toLocaleDateString(localeStr),
+        date: (tx.createdAt ?? new Date()).toLocaleDateString(localeStr),
         credit: tx.movement === 'CREDIT' ? tx.amount : null,
         debit: tx.movement === 'DEBIT' ? tx.amount : null,
         balance,
