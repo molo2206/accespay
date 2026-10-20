@@ -14,7 +14,7 @@ export class AuditService {
   private readonly DEFAULT_LIMIT = 20;
   private readonly MAX_LIMIT = 100;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) { }
 
   /**
    * Crée une entrée d'audit
