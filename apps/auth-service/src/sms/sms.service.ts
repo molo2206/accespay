@@ -18,7 +18,7 @@ export class SmsService {
   // private readonly apiUrl = 'https://api2.dream-digital.info/api/SendSMS';
   private readonly apiId = 'API42928758643';
   private readonly apiPassword = '@@Accesfina!2026';
-  private readonly sender = 'SMS-TEST';
+  private readonly sender = 'AccesPay';
   private readonly apiUrl = 'https://papi.dream-digital.info/api/SendSms';
 
   async sendSms(phoneNumber: string, message: string): Promise<boolean> {
